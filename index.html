@@ -1,0 +1,260 @@
+<html>
+  <head>
+    <title>CommonBook. Keep your connections.</title>
+    <meta name="description" content="CommonBook visualises your IIIF annotations over time and by cluster, and displays your cross-links." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://d3js.org/d3.v4.min.js"></script>
+    <link rel="stylesheet" href="main.css" />
+  </head>
+  <body>
+    <canvas id="viewer" width="1200" height="1200">
+    </canvas>
+    <h2>Crosslinks</h2>
+    <script>
+     var manifests = {};
+
+     fetch('https://iiif.lib.harvard.edu/manifests/drs:5981093').then(function(request) {
+       return request.json();
+     }).then(function(data) {
+
+       var canvases = data.sequences[0].canvases;
+
+       Promise.all(canvases.map(getCanvasThumbImage))
+              .then(function(images){
+                console.log(images);
+                drawThumbsToCanvas(document.getElementById('viewer'), images);
+              });
+     });
+
+     function drawThumbsToCanvas(canvas, images) {
+       var leftPosition = 0,
+           topPosition = 0,
+           canvasWidth = images.reduce(function(sum, image) {
+             return sum + image.width;
+           }, 0),
+           canvasHeight = images.reduce(function(sum, image) {
+             return sum + image.height;
+           }, 0);
+
+       canvas.width = canvasWidth/10;
+       canvas.height = canvasHeight/10;
+
+       var context = canvas.getContext('2d');
+       images.forEach(function(image) {
+         console.log('whyyyyyyy!!!!!!!!!');
+         context.drawImage(image, leftPosition, topPosition);
+         if (leftPosition > canvas.width) {
+           leftPosition = 0;
+           topPosition += image.height;
+         } else {
+           leftPosition += image.width;
+         }
+       });
+     }
+
+     function getCanvasThumbImage(canvas, index, total) {
+       return promisifyImage(canvas.thumbnail['@id']);
+     }
+
+     function drawSourceToRegionLines(canvas, regionBox, excerpt) {
+       var sourceX1 = regionBox.offsetLeft + regionBox.offsetWidth,
+           sourceY1 = regionBox.offsetTop,
+           targetX1 = excerpt.offsetLeft,
+           targetY1 = excerpt.offsetTop,
+           sourceX2 = regionBox.offsetLeft + regionBox.offsetWidth,
+           sourceY2 = regionBox.offsetTop + regionBox.offsetHeight,
+           targetX2 = excerpt.offsetLeft,
+           targetY2 = excerpt.offsetTop + excerpt.offsetHeight;
+
+       var context = canvas.getContext('2d');
+       // Reset the current path
+       context.lineWidth = 2;
+       context.strokeStyle = 'deepSkyBlue';
+       context.beginPath();
+       context.moveTo(
+         sourceX1,
+         sourceY1
+       );
+       context.lineTo(
+         targetX1,
+         targetY1
+       );
+       context.stroke();
+       context.moveTo(
+         sourceX2,
+         sourceY2
+       );
+       context.lineTo(
+         targetX2,
+         targetY2
+       );
+       context.stroke();
+     }
+
+     function fetchAnnotationManifest(annotation) {
+       return fetch(annotation.on.within['@id']).then(function(request) {
+         return request.json();
+       });
+     }
+
+     function getCanvasJSONFromAnnotation(annotation, manifest) {
+       return manifest.sequences[0].canvases.filter(function(canvas) {
+         return canvas['@id'] === annotation.on.full;
+       })[0];
+     }
+
+     function resizeAnnotationRegion(region, canvas, targetWidth) {
+       var scaleFactor = targetWidth/canvas.width;
+       return {
+         x: region.x * scaleFactor,
+         y: region.y * scaleFactor,
+         width: region.width * scaleFactor,
+         height: region.height * scaleFactor
+       }
+     }
+
+     function scaleBoxToWidth(box, width) {
+       var scaleFactor = width/box.width;
+
+       return {
+         x: box.x * scaleFactor,
+         y: box.y,
+         width: box.width * scaleFactor,
+         height: box.height * scaleFactor
+       }
+     }
+
+     function getAnnoCanvasImage(annotation) {
+       var canvasId = annotation.on.full;
+       return canvasId.substring(0, canvasId.lastIndexOf("/")) +
+              '/full/100,/0/default.jpg';
+
+       // for real spec compatibility, we might
+       // want to grab the manifest and then get
+       // the thumbnail. Otherwise, dereference
+       // the canvas (if possible), and use its
+       // thumbnail. Otherwise, suggest an addition
+       // to the spec to include a thumbnail in the
+       // annotation JSON-LD itself. Or at least make
+       // that valid.
+     }
+
+     function getAnnoRegionImage(annotation) {
+       var canvasId = annotation.on.full,
+           fragment = annotation.on.selector.default.value,
+           dimensions = getDimensionsFromFragment(fragment),
+           x = dimensions.x + ',',
+           y = dimensions.y + ',',
+           width = dimensions.width + ',',
+           height = dimensions.height;
+
+       return canvasId.substring(0, canvasId.lastIndexOf("/")) +
+              '/' + x + y + width + height + '/300,/0/default.jpg';
+     }
+
+     function fetchCrossLink(annotation) {
+       var crossLinkUrl = [...createElement(annotation.resource[0].chars)
+                           .getElementsByTagName('a')].filter(function(a) {
+                             return a.getAttribute('href').includes('annotation') &&
+                                    !a.getAttribute('href').includes('8080');
+                           })[0].getAttribute('href');
+
+       return fetch(crossLinkUrl).then(function(request) {
+         return request.json();
+       });
+     }
+
+     function promisifyImage(src) {
+         var image = new Image();
+         var imagePromise = new Promise((resolve, reject) => {
+           image.onload = function() {
+             resolve(image);
+           };
+
+           image.src = src;
+         });
+
+         return imagePromise;
+     }
+
+     function getDimensionsFromFragment(fragment) {
+       var regionArray = fragment.substring(
+         fragment.indexOf("=") + 1,
+         fragment.length + 1
+       ).split(',');
+
+       return {
+         x: parseInt(regionArray[0]),
+         y: parseInt(regionArray[1]),
+         width: parseInt(regionArray[2]),
+         height: parseInt(regionArray[3])
+       }
+     }
+
+     function extractJSON_LD(IA_annotation) {
+       return IA_annotation.annotation;
+     }
+
+     function createElement(DOMString) {
+       var container = document.createElement('div');
+       container.innerHTML = DOMString;
+       return container;
+     }
+
+     function renderCrosslink(annotation) {
+       var mutualAnnotation,
+           source1Manifest,
+           source1Image,
+           target1Image,
+           source2Manifest,
+           source2Image,
+           target2Image;
+
+       mutualAnnotation = fetchCrossLink(annotation);
+       source1Manifest = fetchAnnotationManifest(annotation);
+       source2Manifest = mutualAnnotation.then(function(crossLink) {
+         return fetchAnnotationManifest(crossLink.annotation);
+       });
+       source1Image = source1Manifest.then(function(manifest) {
+         return promisifyImage(getAnnoCanvasImage(annotation));
+       });
+       source2Image = mutualAnnotation.then(function(crossLink) {
+         return source2Manifest.then(function(manifest) {
+           return promisifyImage(getAnnoCanvasImage(crossLink.annotation));
+         });
+       });
+       target1Image = source1Manifest.then(function(manifest) {
+         return promisifyImage(getAnnoRegionImage(annotation));
+       });
+       target2Image = mutualAnnotation.then(function(crossLink) {
+         return source2Manifest.then(function(manifest) {
+           return promisifyImage(getAnnoRegionImage(crossLink.annotation));
+         });
+       });
+
+       console.log('reached render');
+       // When all remote resources have been retrieved, then
+       // render the crosslinks.
+       Promise.all([
+         mutualAnnotation,
+         source1Manifest,
+         source1Image,
+         target1Image,
+         source2Manifest,
+         source2Image,
+         target2Image
+       ]).then((result) => {console.log(result)});
+     }
+
+     function renderContextDiagram(annotationData) {
+     }
+
+     function renderCrosslinkAsImage(annotationData) {
+     }
+
+     function renderAnnotationAsImage(annotation, index, array) {
+     }
+    </script>
+  </body>
+</html>
+</html>
